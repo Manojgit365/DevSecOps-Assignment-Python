@@ -1,0 +1,76 @@
+import boto3
+import botocore
+import json
+import csv
+import os
+
+def list_s3_buckets():
+    s3 = boto3.client('s3')
+    response = s3.list_buckets()
+    return [bucket['Name'] for bucket in response['Buckets']]
+
+def check_bucket_public_access(s3, bucket_name):
+    try:
+        settings = s3.get_bucket_policy_status(Bucket=bucket_name)
+        return settings['PolicyStatus']['IsPublic']
+    except botocore.exceptions.ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchBucketPolicy':
+            return False
+        else:
+            raise e
+
+def check_bucket_encryption(s3, bucket_name):
+    try:
+        response = s3.get_bucket_encryption(Bucket=bucket_name)
+        rules = response['ServerSideEncryptionConfiguration']['Rules']
+        return bool(rules)
+    except botocore.exceptions.ClientError as e:
+        if e.response['Error']['Code'] in ['ServerSideEncryptionConfigurationNotFoundError', 'NoSuchBucket']:
+            return False
+        else:
+            raise e
+
+def check_bucket_versioning(s3, bucket_name):
+    response = s3.get_bucket_versioning(Bucket=bucket_name)
+    return response.get('Status') == 'Enabled'
+
+def audit_buckets():
+    s3 = boto3.client('s3')
+    buckets = list_s3_buckets()
+
+    audit_results = []
+
+    for bucket in buckets:
+        print(f"Auditing bucket: {bucket}")
+        result = {
+            'BucketName': bucket,
+            'PublicAccess': check_bucket_public_access(s3, bucket),
+            'EncryptionEnabled': check_bucket_encryption(s3, bucket),
+            'VersioningEnabled': check_bucket_versioning(s3, bucket)
+        }
+        audit_results.append(result)
+
+    return audit_results
+
+def save_to_json(results, filepath='s3_audit_report.json'):
+    with open(filepath, 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"✅ JSON report saved to: {filepath}")
+
+def save_to_csv(results, filepath='s3_audit_report.csv'):
+    with open(filepath, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=results[0].keys())
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"✅ CSV report saved to: {filepath}")
+
+def main():
+    results = audit_buckets()
+
+Output Files
+/s3_audit_report.json – Detailed JSON results
+
+/s3_audit_report.csv – Tabular CSV report
+
+BucketName	PublicAccess	EncryptionEnabled	VersioningEnabled
+my-bucket-123	False	True	True
