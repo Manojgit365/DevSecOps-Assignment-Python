@@ -1,0 +1,83 @@
+import boto3
+import json
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Clients
+events_client = boto3.client('events')
+sns_client = boto3.client('sns')
+iam_client = boto3.client('iam')
+
+# Config
+RULE_NAME = "UnauthorizedActivityRule"
+SNS_TOPIC_NAME = "UnauthorizedActivityAlerts"
+EMAIL = "example@example.com"  # Replace with your email if needed
+
+# Step 1: Create SNS Topic
+def create_sns_topic(topic_name):
+    response = sns_client.create_topic(Name=topic_name)
+    topic_arn = response['TopicArn']
+    logging.info(f"SNS Topic created: {topic_arn}")
+    return topic_arn
+
+# Step 2: Subscribe Email to SNS
+def subscribe_email_to_sns(topic_arn, email):
+    response = sns_client.subscribe(
+        TopicArn=topic_arn,
+        Protocol='email',
+        Endpoint=email
+    )
+    logging.info(f"Email subscription requested. Confirm email: {email}")
+    return response
+
+# Step 3: Create Event Rule
+def create_event_rule(rule_name):
+    event_pattern = {
+        "source": ["aws.signin", "aws.cloudtrail"],
+        "detail-type": ["AWS Console Sign In via CloudTrail", "AWS API Call via CloudTrail"],
+        "detail": {
+            "eventName": ["ConsoleLogin", "UnauthorizedOperation"],
+            "errorMessage": [{"exists": True}]
+        }
+    }
+
+    response = events_client.put_rule(
+        Name=rule_name,
+        EventPattern=json.dumps(event_pattern),
+        State="ENABLED",
+        Description="Detects ConsoleLogin failures and UnauthorizedOperation events"
+    )
+    rule_arn = response['RuleArn']
+    logging.info(f"Event Rule created: {rule_arn}")
+    return rule_arn
+
+# Step 4: Attach SNS as target
+def attach_sns_target(rule_name, topic_arn):
+    target_id = "SendToSNS"
+    response = events_client.put_targets(
+        Rule=rule_name,
+        Targets=[
+            {
+                "Id": target_id,
+                "Arn": topic_arn
+            }
+        ]
+    )
+    logging.info(f"Target added to rule {rule_name}: {target_id}")
+    return response
+
+# Main execution
+def main():
+    try:
+        topic_arn = create_sns_topic(SNS_TOPIC_NAME)
+        subscribe_email_to_sns(topic_arn, EMAIL)
+        rule_arn = create_event_rule(RULE_NAME)
+        attach_sns_target(RULE_NAME, topic_arn)
+        logging.info("CloudWatch alert setup completed successfully.")
+    except Exception as e:
+        logging.error(f" Error occurred: {e}")
+
+if __name__ == "__main__":
+    main()
