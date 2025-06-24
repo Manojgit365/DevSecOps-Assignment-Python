@@ -1,0 +1,85 @@
+import boto3
+import json
+
+RISKY_PORTS = [22, 3389, 80]
+PUBLIC_CIDR = '0.0.0.0/0'
+
+def get_security_groups():
+    ec2 = boto3.client('ec2')
+    response = ec2.describe_security_groups()
+    return response['SecurityGroups']
+
+def analyze_security_groups(groups):
+    findings = []
+
+    for sg in groups:
+        group_id = sg['GroupId']
+        group_name = sg.get('GroupName', '')
+        risky_ports = []
+        open_all_ports = False
+
+        for rule in sg.get('IpPermissions', []):
+            from_port = rule.get('FromPort')
+            to_port = rule.get('ToPort')
+            ip_ranges = rule.get('IpRanges', [])
+
+            # Check for all-ports open
+            if from_port == 0 and to_port == 65535:
+                for ip_range in ip_ranges:
+                    if ip_range.get('CidrIp') == PUBLIC_CIDR:
+                        open_all_ports = True
+
+            # Check for specific risky ports
+            if from_port in RISKY_PORTS:
+                for ip_range in ip_ranges:
+                    if ip_range.get('CidrIp') == PUBLIC_CIDR:
+                        risky_ports.append(from_port)
+
+        if risky_ports or open_all_ports:
+            findings.append({
+                'GroupId': group_id,
+                'GroupName': group_name,
+                'RiskyPortsOpenToWorld': risky_ports,
+                'OpenAllPorts': open_all_ports,
+                'Recommendation': generate_recommendation(risky_ports, open_all_ports)
+            })
+
+    return findings
+
+def generate_recommendation(ports, all_open):
+    if all_open:
+        return "Remove 0.0.0.0/0 rule allowing access to all ports. Restrict by IP and port."
+    if ports:
+        return f"Restrict access to port(s) {ports} from 0.0.0.0/0. Use specific IP ranges."
+    return "Secure"
+
+def save_findings(findings, filepath='ec2_sg_findings.json'):
+    with open(filepath, 'w') as f:
+        json.dump(findings, f, indent=2)
+    print(f" Security Group findings saved to: {filepath}")
+
+def main():
+    print(" Scanning EC2 Security Groups...")
+    groups = get_security_groups()
+    findings = analyze_security_groups(groups)
+
+    if findings:
+        print(f" Found {len(findings)} risky security groups.")
+        save_findings(findings)
+    else:
+        print(" No risky security group configurations found.")
+
+if __name__ == '__main__':
+    main()
+
+
+output -- JSON
+[
+  {
+    "GroupId": "sg-0123456789abcdef0",
+    "GroupName": "default",
+    "RiskyPortsOpenToWorld": [22],
+    "OpenAllPorts": false,
+    "Recommendation": " Restrict access to port(s) [22] from 0.0.0.0/0. Use specific IP ranges."
+  }
+]
