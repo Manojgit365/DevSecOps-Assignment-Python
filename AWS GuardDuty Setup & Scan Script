@@ -1,0 +1,72 @@
+import boto3
+import botocore
+import json
+import argparse
+import os
+
+def get_guardduty_client(region):
+    return boto3.client('guardduty', region_name=region)
+
+def get_detector_id(client):
+    detectors = client.list_detectors()
+    if detectors['DetectorIds']:
+        return detectors['DetectorIds'][0]
+    return None
+
+def enable_guardduty(client):
+    try:
+        response = client.create_detector(Enable=True)
+        detector_id = response['DetectorId']
+        print(f"✅ GuardDuty enabled with Detector ID: {detector_id}")
+        return detector_id
+    except botocore.exceptions.ClientError as e:
+        print(f"❌ Error enabling GuardDuty: {e}")
+        return None
+
+def fetch_findings(client, detector_id):
+    findings = []
+    try:
+        response = client.list_findings(DetectorId=detector_id, MaxResults=50)
+        finding_ids = response.get('FindingIds', [])
+        if finding_ids:
+            details = client.get_findings(DetectorId=detector_id, FindingIds=finding_ids)
+            findings = details['Findings']
+            print(f"🔍 Retrieved {len(findings)} findings.")
+        else:
+            print("ℹ️ No findings found.")
+    except botocore.exceptions.ClientError as e:
+        print(f"❌ Error fetching findings: {e}")
+    return findings
+
+def save_findings_to_file(findings, filepath="/tmp/guardduty_findings.json"):
+    try:
+        with open(filepath, 'w') as f:
+            json.dump(findings, f, indent=2)
+        print(f"💾 Findings saved to {filepath}")
+    except Exception as e:
+        print(f"❌ Error saving file: {e}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Enable GuardDuty and export findings.")
+    parser.add_argument('--region', default='us-east-1', help='AWS region (default: us-east-1)')
+    args = parser.parse_args()
+
+    client = get_guardduty_client(args.region)
+
+    detector_id = get_detector_id(client)
+    if detector_id:
+        print(f"✅ GuardDuty already enabled. Detector ID: {detector_id}")
+    else:
+        print("🔧 GuardDuty not enabled. Enabling now...")
+        detector_id = enable_guardduty(client)
+        if not detector_id:
+            return
+
+    findings = fetch_findings(client, detector_id)
+    save_findings_to_file(findings)
+
+if __name__ == "__main__":
+    main()
+
+
+command to run: python guardduty_setup_scan.py --region us-west-2
