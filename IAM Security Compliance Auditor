@@ -1,0 +1,100 @@
+import boto3
+import datetime
+import json
+import argparse
+from prettytable import PrettyTable
+
+# Constants
+DAYS_THRESHOLD = 90
+
+def get_iam_users():
+    client = boto3.client('iam')
+    paginator = client.get_paginator('list_users')
+    users = []
+    for page in paginator.paginate():
+        users.extend(page['Users'])
+    return users
+
+def check_mfa(client, username):
+    mfa = client.list_mfa_devices(UserName=username)
+    return len(mfa['MFADevices']) > 0
+
+def check_old_keys(client, username):
+    access_keys = client.list_access_keys(UserName=username)['AccessKeyMetadata']
+    old_keys = []
+    for key in access_keys:
+        key_age = (datetime.datetime.now(datetime.timezone.utc) - key['CreateDate']).days
+        if key_age > DAYS_THRESHOLD:
+            old_keys.append({
+                'AccessKeyId': key['AccessKeyId'],
+                'AgeInDays': key_age
+            })
+    return old_keys
+
+def check_last_login(user):
+    password_last_used = user.get('PasswordLastUsed')
+    if password_last_used:
+        days_since_login = (datetime.datetime.now(datetime.timezone.utc) - password_last_used).days
+        if days_since_login > DAYS_THRESHOLD:
+            return days_since_login
+    else:
+        return 'Never logged in'
+    return None
+
+def audit_iam():
+    client = boto3.client('iam')
+    users = get_iam_users()
+    report = []
+
+    for user in users:
+        username = user['UserName']
+        user_data = {
+            'Username': username,
+            'MFAEnabled': check_mfa(client, username),
+            'OldAccessKeys': check_old_keys(client, username),
+            'InactiveDays': check_last_login(user)
+        }
+        report.append(user_data)
+
+    return report
+
+def print_table(report):
+    table = PrettyTable()
+    table.field_names = ['Username', 'MFA Enabled', 'Old Access Keys', 'Inactive Days']
+
+    for user in report:
+        old_keys_info = ', '.join([f"{k['AccessKeyId']} ({k['AgeInDays']}d)" for k in user['OldAccessKeys']]) or "None"
+        table.add_row([
+            user['Username'],
+            "Yes" if user['MFAEnabled'] else "No",
+            old_keys_info,
+            user['InactiveDays']
+        ])
+    print(table)
+
+def save_json(report, filename='iam_audit_report.json'):
+    with open(filename, 'w') as f:
+        json.dump(report, f, indent=2, default=str)
+    print(f"\n💾 JSON report saved to: {filename}")
+
+def main():
+    parser = argparse.ArgumentParser(description="IAM Security Compliance Auditor")
+    parser.add_argument('--json', action='store_true', help='Output as JSON instead of table')
+    args = parser.parse_args()
+
+    report = audit_iam()
+    
+    if args.json:
+        save_json(report)
+    else:
+        print_table(report)
+
+if __name__ == "__main__":
+    main()
+
+Table View:
+python iam_auditor.py
+
+JSON File Output:
+python iam_auditor.py --json
+
